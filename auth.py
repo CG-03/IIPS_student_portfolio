@@ -53,11 +53,11 @@ def get_user(user_id):
 
 def register_student(full_name, enrollment, email, password, confirm):
     full_name, enrollment, email = full_name.strip(), enrollment.strip().upper(), email.strip().lower()
-    if len(full_name) < 3:
-        return False, "Please enter your full name."
+    if not 3 <= len(full_name) <= 80:
+        return False, "Full name must be between 3 and 80 characters."
     if not re.match(r"^[A-Z0-9/\-]{4,20}$", enrollment):
         return False, "Enrollment number must be 4-20 characters (letters, numbers, / or -)."
-    if not EMAIL_RE.match(email):
+    if len(email) > 120 or not EMAIL_RE.match(email):
         return False, "Please enter a valid email address."
     err = validate_password(password)
     if err:
@@ -67,6 +67,20 @@ def register_student(full_name, enrollment, email, password, confirm):
     pw_hash, salt = hash_password(password)
     with closing(get_conn()) as conn:
         try:
+            conn.execute("BEGIN IMMEDIATE")
+            if conn.execute(
+                "SELECT 1 FROM users WHERE email = ? COLLATE NOCASE "
+                "OR username = ? COLLATE NOCASE LIMIT 1",
+                (email, email),
+            ).fetchone():
+                conn.rollback()
+                return False, "An account with this email already exists."
+            if conn.execute(
+                "SELECT 1 FROM student_profiles WHERE UPPER(enrollment_no) = ? LIMIT 1",
+                (enrollment,),
+            ).fetchone():
+                conn.rollback()
+                return False, "An account with this enrollment number already exists."
             cur = conn.execute(
                 "INSERT INTO users (username, email, full_name, password_hash, salt, role) "
                 "VALUES (?, ?, ?, ?, ?, 'student')",
@@ -78,12 +92,36 @@ def register_student(full_name, enrollment, email, password, confirm):
             )
             conn.commit()
         except sqlite3.IntegrityError:
-            return False, "An account with this email or enrollment number already exists."
+            conn.rollback()
+            if conn.execute(
+                "SELECT 1 FROM users WHERE email = ? COLLATE NOCASE "
+                "OR username = ? COLLATE NOCASE LIMIT 1",
+                (email, email),
+            ).fetchone():
+                return False, "An account with this email already exists."
+            if conn.execute(
+                "SELECT 1 FROM student_profiles WHERE UPPER(enrollment_no) = ? LIMIT 1",
+                (enrollment,),
+            ).fetchone():
+                return False, "An account with this enrollment number already exists."
+            raise
     return True, "Registration successful. You can now log in."
 
 
 def authenticate(identifier, password):
-    row = query("SELECT * FROM users WHERE username = ?", (identifier.strip().lower(),), one=True)
+    identifier = identifier.strip()
+    row = query(
+        "SELECT id, username, email, full_name, password_hash, salt, role, must_change_password "
+        "FROM users WHERE username = ? COLLATE NOCASE",
+        (identifier,), one=True,
+    )
+    if not row:
+        matches = query(
+            "SELECT id, username, email, full_name, password_hash, salt, role, must_change_password "
+            "FROM users WHERE email = ? COLLATE NOCASE ORDER BY id LIMIT 2",
+            (identifier,),
+        )
+        row = matches[0] if len(matches) == 1 else None
     if not row:
         hash_password(password)  # keep timing similar for unknown users
         return None

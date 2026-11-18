@@ -32,13 +32,13 @@ def login_view():
                 if st.form_submit_button("Log in", type="primary"):
                     if not ident.strip() or not pw:
                         st.error("Enter your email or username and password.")
-                        return
-                    user = auth.authenticate(ident, pw)
-                    if user:
-                        st.session_state["uid"] = user["id"]
-                        st.rerun()
                     else:
-                        st.error("Invalid credentials.")
+                        user = auth.authenticate(ident, pw)
+                        if user:
+                            st.session_state["uid"] = user["id"]
+                            st.rerun()
+                        else:
+                            st.error("Invalid credentials.")
         with tab_reg:
             with st.form("register_form", clear_on_submit=True):
                 name = st.text_input("Full name", max_chars=80)
@@ -81,7 +81,8 @@ def main():
     uid = st.session_state.get("uid")
     user = auth.get_user(uid) if uid else None
     if not user:
-        st.session_state.clear()
+        if uid is not None:
+            st.session_state.pop("uid", None)
         login_view()
         return
 
